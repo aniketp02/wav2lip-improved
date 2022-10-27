@@ -1,10 +1,10 @@
-#checkpoint folders to ignore
+#checkpoints and dataset folders
+lrs2_preprocessed/
 checkpoints/
 checkpoints_new/
 face_detection/
-train_data/
 temp/
-lrs2_preprocessed/
+train_data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
