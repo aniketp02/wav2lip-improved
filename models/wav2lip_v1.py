@@ -14,17 +14,17 @@ class Wav2Lip(nn.Module):
         self.face_encoder_blocks = nn.ModuleList([
             nn.Sequential(Conv2d(6, 16, kernel_size=7, stride=1, padding=3)), # 96,96
 
-            nn.Sequential(ConvNeXt(16, dims=(16, 32), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 48x48
+            nn.Sequential(ConvNeXt(16, dims=(16, 32), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 48,48
 
-            nn.Sequential(ConvNeXt(32, dims=(48, 64), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 24x24
+            nn.Sequential(ConvNeXt(32, dims=(48, 64), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 24,24
 
-            nn.Sequential(ConvNeXt(64, dims=(96, 128), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 12x12
+            nn.Sequential(ConvNeXt(64, dims=(96, 128), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 12,12
 
-            nn.Sequential(ConvNeXt(128, dims=(196, 256), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 6x6
+            nn.Sequential(ConvNeXt(128, dims=(196, 256), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 6,6
 
-            nn.Sequential(ConvNeXt(256, dims=(256, 384), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 3x3
+            nn.Sequential(ConvNeXt(256, dims=(256, 384), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 3,3
 
-            nn.Sequential(ConvNeXt(384, dims=(384, 512), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 1x1
+            nn.Sequential(ConvNeXt(384, dims=(384, 512), depths=(3, 9,), kernel_sizes=5, patch_size=1),), # 1,1
             ])
 
         self.audio_encoder = nn.Sequential(
@@ -36,30 +36,53 @@ class Wav2Lip(nn.Module):
             )
 
         self.face_decoder_blocks = nn.ModuleList([
-            nn.Sequential(Conv2d(512, 512, kernel_size=1, stride=1, padding=0),),
+            nn.Sequential(Conv2d(512, 512, kernel_size=1, stride=1, padding=0),), # 1,1
 
-            nn.Sequential(Conv2dTranspose(1024, 512, kernel_size=3, stride=1, padding=0), # 3,3
-            Conv2d(512, 512, kernel_size=3, stride=1, padding=1, residual=True),),
+            nn.Sequential(Conv2dTranspose(1024, 512, kernel_size=3, stride=1, padding=0), 
+            ConvNeXt(512, dims=(512, 512), depths=(3, 9,), kernel_sizes=5, patch_size=1),
+            ), # 3,3
 
             nn.Sequential(Conv2dTranspose(896, 512, kernel_size=3, stride=2, padding=1, output_padding=1),
-            Conv2d(512, 512, kernel_size=3, stride=1, padding=1, residual=True),
-            Conv2d(512, 512, kernel_size=3, stride=1, padding=1, residual=True),), # 6, 6
+            Conv2d(512, 512, kernel_size=3, stride=1, padding=2, residual=False),
+            ConvNeXt(512, dims=(512, 512), depths=(3, 9,), kernel_sizes=5, patch_size=1),
+            ), # 6, 6
 
             nn.Sequential(Conv2dTranspose(768, 384, kernel_size=3, stride=2, padding=1, output_padding=1),
+            ConvNeXt(384, dims=(384, 384), depths=(3, 9,), kernel_sizes=5, patch_size=1),
+            nn.ReflectionPad2d(2),
             Conv2d(384, 384, kernel_size=3, stride=1, padding=1, residual=True),
-            Conv2d(384, 384, kernel_size=3, stride=1, padding=1, residual=True),), # 12, 12
+            ), # 12, 12
 
             nn.Sequential(Conv2dTranspose(512, 256, kernel_size=3, stride=2, padding=1, output_padding=1),
+            ConvNeXt(256, dims=(256, 256), depths=(3, 9,), kernel_sizes=5, patch_size=1),
+            nn.ReflectionPad2d(2),
+            Conv2d(256, 256, kernel_size=3, stride=1, padding=4, residual=False),
             Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True),
-            Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True),), # 24, 24
+            ), # 24, 24
 
-            nn.Sequential(Conv2dTranspose(320, 128, kernel_size=3, stride=2, padding=1, output_padding=1), 
-            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),
-            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),), # 48, 48
+            nn.Sequential(Conv2dTranspose(320, 128, kernel_size=3, stride=2, padding=1, output_padding=1),
+            ConvNeXt(128, dims=(128, 128), depths=(3, 9,), kernel_sizes=5, patch_size=1),
+            nn.ReflectionPad2d(4),
+            Conv2d(128, 128, kernel_size=3, stride=1, padding=4, residual=False),
+            nn.ReflectionPad2d(3),
+            Conv2d(128, 128, kernel_size=3, stride=1, padding=2, residual=False),
+            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True), 
+            ), # 48, 48
 
             nn.Sequential(Conv2dTranspose(160, 64, kernel_size=3, stride=2, padding=1, output_padding=1),
+            ConvNeXt(64, dims=(64, 64), depths=(3, 9,), kernel_sizes=5, patch_size=1),
+            nn.ReflectionPad2d(4),
+            Conv2d(64, 64, kernel_size=3, stride=1, padding=4, residual=False),
+            nn.ReflectionPad2d(4),
+            Conv2d(64, 64, kernel_size=3, stride=1, padding=4, residual=False),
             Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),
-            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),),]) # 96,96
+            nn.ReflectionPad2d(4),
+            Conv2d(64, 64, kernel_size=3, stride=1, padding=4, residual=False),
+            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),
+            nn.ReflectionPad2d(2),
+            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),
+            ),# 96,96
+            ]) 
 
         self.output_block = nn.Sequential(Conv2d(80, 32, kernel_size=3, stride=1, padding=1),
             nn.Conv2d(32, 3, kernel_size=1, stride=1, padding=0),
@@ -82,6 +105,7 @@ class Wav2Lip(nn.Module):
             x = f(x)
             # print('face_encoder : {}'.format(x.shape))
             feats.append(x)
+
 
         x = audio_embedding
         for f in self.face_decoder_blocks:
@@ -117,3 +141,12 @@ class Wav2Lip(nn.Module):
 # model = Wav2Lip()
 # print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
 # print(model(audio_sequences, face_sequences).shape)
+
+
+        # feats.append(torch.rand(5, 16, 96, 96))
+        # feats.append(torch.rand(5, 32, 48, 48))
+        # feats.append(torch.rand(5, 64, 24, 24))
+        # feats.append(torch.rand(5, 128, 12, 12))
+        # feats.append(torch.rand(5, 256, 6, 6))
+        # feats.append(torch.rand(5, 384, 3, 3))
+        # feats.append(torch.rand(5, 512, 1, 1))

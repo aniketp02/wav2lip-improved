@@ -38,7 +38,9 @@ class Conv2dTranspose(nn.Module):
                             nn.BatchNorm2d(cout)
                             )
         self.act = nn.ReLU()
+        self.pad = nn.ReflectionPad2d(2)
 
     def forward(self, x):
         out = self.conv_block(x)
-        return self.act(out)
+        out = self.act(out)
+        return self.pad(out)

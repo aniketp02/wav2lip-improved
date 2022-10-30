@@ -315,5 +315,6 @@ class ConvNeXt(nn.Module):
 
 ''' Testing the convnext file '''
 # convnxt = ConvNeXt(32, patch_size = 1, dims=(32, 32, 64, 64),)
+# print('total trainable params {}'.format(sum(p.numel() for p in convnxt.parameters() if p.requires_grad)))
 # y1 = torch.rand(1, 32, 80, 160)
 # print(convnxt(y1).shape) #[1, 64, 10, 20]

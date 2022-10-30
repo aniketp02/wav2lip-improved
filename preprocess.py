@@ -5,9 +5,9 @@ if sys.version_info[0] < 3 and sys.version_info[1] < 2:
 
 from os import listdir, path
 
-if not path.isfile('face_detection/detection/sfd/s3fd.pth'):
-	raise FileNotFoundError('Save the s3fd model to face_detection/detection/sfd/s3fd.pth \
-							before running this script!')
+# if not path.isfile('face_detection/detection/sfd/s3fd.pth'):
+# 	raise FileNotFoundError('Save the s3fd model to face_detection/detection/sfd/s3fd.pth \
+							# before running this script!')
 
 import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,8 +29,9 @@ parser.add_argument("--preprocessed_root", help="Root folder of the preprocessed
 
 args = parser.parse_args()
 
-fa = [face_detection.FaceAlignment(face_detection.LandmarksType._2D, flip_input=False, 
-									device='cuda:{}'.format(id)) for id in range(args.ngpu)]
+detector = face_detection.build_detector("RetinaNetResNet50", confidence_threshold=.5, nms_iou_threshold=.3)
+# fa = [face_detection.FaceAlignment(face_detection.LandmarksType._2D, flip_input=False, 
+									# device='cuda:{}'.format(id)) for id in range(args.ngpu)]
 
 template = 'ffmpeg -loglevel panic -y -i {} -strict -2 {}'
 # template2 = 'ffmpeg -hide_banner -loglevel panic -threads 1 -y -i {} -async 1 -ac 1 -vn -acodec pcm_s16le -ar 16000 {}'
@@ -56,15 +57,22 @@ def process_video_file(vfile, args, gpu_id):
 
 	i = -1
 	for fb in batches:
-		preds = fa[gpu_id].get_detections_for_batch(np.asarray(fb))
+		preds = detector.batched_detect(np.asarray(fb))
 
 		for j, f in enumerate(preds):
 			i += 1
 			if f is None:
 				continue
 
-			x1, y1, x2, y2 = f
+			x1, y1, x2, y2, _ = f[0]
+			
+			x1 = max(0, int(x1))
+			y1 = max(0, int(y1))
+			x2 = min(fb[j].shape[1], int(x2))
+			y2 = min(fb[j].shape[0], int(y2))
+
 			cv2.imwrite(path.join(fulldir, '{}.jpg'.format(i)), fb[j][y1:y2, x1:x2])
+
 
 def process_audio_file(vfile, args):
 	vidname = os.path.basename(vfile).split('.')[0]
