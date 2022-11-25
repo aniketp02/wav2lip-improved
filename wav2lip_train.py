@@ -1,7 +1,7 @@
 from os.path import dirname, join, basename, isfile
 from tqdm import tqdm
 
-from models import SyncNet_color as SyncNet
+from models import SyncNet_ConvNext as SyncNet
 from models import Wav2Lip as Wav2Lip
 import audio
 
@@ -16,6 +16,8 @@ from glob import glob
 
 import os, random, cv2, argparse
 from hparams import hparams, get_image_list
+
+import wandb
 
 parser = argparse.ArgumentParser(description='Code to train the Wav2Lip model without the visual quality discriminator')
 
@@ -36,6 +38,21 @@ print('use_cuda: {}'.format(use_cuda))
 
 syncnet_T = 5
 syncnet_mel_step_size = 16
+
+#initializing the wandb logs
+wandb.init(
+    # Set the project where this run will be logged
+    project="wav2lip-imporved_v1",  
+    # Track hyperparameters and run metadata
+    config={
+    "batch_size": hparams.batch_size,
+    "learning_rate": hparams.initial_learning_rate,
+    "syncnet_wt": hparams.syncnet_wt,
+    "checkpoint_interval": hparams.checkpoint_interval,
+    "eval_interval": hparams.eval_interval,
+    "architecture": "ConvNeXT",
+    "dataset": "lrs2",
+})
 
 class Dataset(object):
     def __init__(self, split):
@@ -175,6 +192,8 @@ def save_sample_images(x, g, gt, global_step, checkpoint_dir):
     for batch_idx, c in enumerate(collage):
         for t in range(len(c)):
             cv2.imwrite('{}/{}_{}.jpg'.format(folder, batch_idx, t), c[t])
+            wandb_img = wandb.Image('{}/{}_{}.jpg'.format(folder, batch_idx, t), caption="{}_{}".format(batch_idx, t))
+            wandb.log({"{}".format(folder): wandb_img})
 
 logloss = nn.BCELoss()
 def cosine_loss(a, v, y):
@@ -255,6 +274,7 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
 
             prog_bar.set_description('L1: {}, Sync Loss: {}'.format(running_l1_loss / (step + 1),
                                                                     running_sync_loss / (step + 1)))
+            wandb.log({"Train L1": running_l1_loss / (step + 1), "Train Sync Loss": running_sync_loss / (step + 1)})
 
         global_epoch += 1
         
@@ -288,6 +308,7 @@ def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
                 averaged_recon_loss = sum(recon_losses) / len(recon_losses)
 
                 print('L1: {}, Sync loss: {}'.format(averaged_recon_loss, averaged_sync_loss))
+                wandb.log({"Eval L1": averaged_recon_loss, "Eval Sync loss": averaged_sync_loss})
 
                 return averaged_sync_loss
 
