@@ -3,11 +3,13 @@ import numpy as np
 import scipy, cv2, os, sys, argparse, audio
 import json, subprocess, random, string
 from tqdm import tqdm
+import time
 from glob import glob
-import torch, face_detection
+import torch
 from models import Wav2Lip
 import platform
 
+import face_detection
 parser = argparse.ArgumentParser(description='Inference code to lip-sync videos in the wild using Wav2Lip models')
 
 parser.add_argument('--checkpoint_path', type=str, 
@@ -66,23 +68,25 @@ def get_smoothened_boxes(boxes, T):
 	return boxes
 
 def face_detect(images):
-	detector = face_detection.FaceAlignment(face_detection.LandmarksType._2D, 
-											flip_input=False, device=device)
-
 	batch_size = args.face_det_batch_size
-	
-	while 1:
-		predictions = []
+
+	detector = face_detection.build_detector("RetinaNetMobileNetV1")
+	predictions = []
+	for i in tqdm(range(0, len(images))):
+		prediction = detector.detect(images[i])
 		try:
-			for i in tqdm(range(0, len(images), batch_size)):
-				predictions.extend(detector.get_detections_for_batch(np.array(images[i:i + batch_size])))
-		except RuntimeError:
-			if batch_size == 1: 
-				raise RuntimeError('Image too big to run face detection on GPU. Please use the --resize_factor argument')
-			batch_size //= 2
-			print('Recovering from OOM error; New batch size: {}'.format(batch_size))
-			continue
-		break
+			x1, y1, x2, y2, score = prediction[0]
+		except IndexError:
+			print('error 1')
+			x1, x2, y1, y2 = 0, 0, 0, 0
+		except ValueError:
+			print('error 2')
+			print(prediction[0])
+			x1, y1, x2, y2 = prediction[0]
+		box = [x1, y1, x2, y2]
+		predictions.append(box)
+
+
 
 	results = []
 	pady1, pady2, padx1, padx2 = args.pads
@@ -91,10 +95,10 @@ def face_detect(images):
 			cv2.imwrite('temp/faulty_frame.jpg', image) # check this frame where the face was not detected.
 			raise ValueError('Face not detected! Ensure the video contains a face in all the frames.')
 
-		y1 = max(0, rect[1] - pady1)
-		y2 = min(image.shape[0], rect[3] + pady2)
-		x1 = max(0, rect[0] - padx1)
-		x2 = min(image.shape[1], rect[2] + padx2)
+		y1 = int(max(0, rect[1] - pady1))
+		y2 = int(min(image.shape[0], rect[3] + pady2))
+		x1 = int(max(0, rect[0] - padx1))
+		x2 = int(min(image.shape[1], rect[2] + padx2))
 		
 		results.append([x1, y1, x2, y2])
 
@@ -102,11 +106,13 @@ def face_detect(images):
 	if not args.nosmooth: boxes = get_smoothened_boxes(boxes, T=5)
 	results = [[image[y1: y2, x1:x2], (y1, y2, x1, x2)] for image, (x1, y1, x2, y2) in zip(images, boxes)]
 
-	del detector
+	# del detector
 	return results 
 
 def datagen(frames, mels):
 	img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []
+
+	fd_time = time.time()
 
 	if args.box[0] == -1:
 		if not args.static:
@@ -118,7 +124,11 @@ def datagen(frames, mels):
 		y1, y2, x1, x2 = args.box
 		face_det_results = [[f[y1: y2, x1:x2], (y1, y2, x1, x2)] for f in frames]
 
+	# print('Time for face detection {} '.format(time.time() - fd_time))
+
 	for i, m in enumerate(mels):
+		if i%(args.wav2lip_batch_size) == 0:
+			int_time = time.time()
 		idx = 0 if args.static else i%len(frames)
 		frame_to_save = frames[idx].copy()
 		face, coords = face_det_results[idx].copy()
@@ -130,6 +140,10 @@ def datagen(frames, mels):
 		frame_batch.append(frame_to_save)
 		coords_batch.append(coords)
 
+		# if i%(args.wav2lip_batch_size) == 0:
+		# 	print('{} Initializing time {} '.format(i, time.time() - int_time))
+		batch_time = time.time()
+
 		if len(img_batch) >= args.wav2lip_batch_size:
 			img_batch, mel_batch = np.asarray(img_batch), np.asarray(mel_batch)
 
@@ -138,7 +152,7 @@ def datagen(frames, mels):
 
 			img_batch = np.concatenate((img_masked, img_batch), axis=3) / 255.
 			mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])
-
+			# print('Returning batch time is {} '.format(time.time() - batch_time))
 			yield img_batch, mel_batch, frame_batch, coords_batch
 			img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []
 
@@ -150,7 +164,7 @@ def datagen(frames, mels):
 
 		img_batch = np.concatenate((img_masked, img_batch), axis=3) / 255.
 		mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])
-
+		# print('Returning batch time is {} '.format(time.time() - batch_time))
 		yield img_batch, mel_batch, frame_batch, coords_batch
 
 mel_step_size = 16
@@ -173,7 +187,7 @@ def load_model(path):
 	new_s = {}
 	for k, v in s.items():
 		new_s[k.replace('module.', '')] = v
-	model.load_state_dict(new_s)
+	model.load_state_dict(s)
 
 	model = model.to(device)
 	return model.eval()
@@ -223,7 +237,7 @@ def main():
 
 	wav = audio.load_wav(args.audio, 16000)
 	mel = audio.melspectrogram(wav)
-	print(mel.shape)
+	# print(mel.shape)
 
 	if np.isnan(mel.reshape(-1)).sum() > 0:
 		raise ValueError('Mel contains nan! Using a TTS voice? Add a small epsilon noise to the wav file and try again')
@@ -246,6 +260,9 @@ def main():
 	batch_size = args.wav2lip_batch_size
 	gen = datagen(full_frames.copy(), mel_chunks)
 
+	
+	pred_time = time.time()
+
 	for i, (img_batch, mel_batch, frames, coords) in enumerate(tqdm(gen, 
 											total=int(np.ceil(float(len(mel_chunks))/batch_size)))):
 		if i == 0:
@@ -256,12 +273,16 @@ def main():
 			out = cv2.VideoWriter('temp/result.avi', 
 									cv2.VideoWriter_fourcc(*'DIVX'), fps, (frame_w, frame_h))
 
+		pt1 = time.time()
 		img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(device)
 		mel_batch = torch.FloatTensor(np.transpose(mel_batch, (0, 3, 1, 2))).to(device)
 
 		with torch.no_grad():
 			pred = model(mel_batch, img_batch)
 
+		# print('Before prediction time in loop {} '.format(time.time() - pt1))
+		##        
+		pt2 = time.time()
 		pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.
 		
 		for p, f, c in zip(pred, frames, coords):
@@ -270,11 +291,20 @@ def main():
 
 			f[y1:y2, x1:x2] = p
 			out.write(f)
+		# print('After writing the output file {} '.format(time.time() - pt2))
 
 	out.release()
 
+	# print('Time for prediction and generating output {}'.format(time.time() - pred_time))
+
+	sync_time = time.time()
+
 	command = 'ffmpeg -y -i {} -i {} -strict -2 -q:v 1 {}'.format(args.audio, 'temp/result.avi', args.outfile)
 	subprocess.call(command, shell=platform.system() != 'Windows')
+
+	# print('Syncing time {} '.format(time.time() - sync_time))
+	# print("Total time taken {}".format(time.time() - tt))
+	
 
 if __name__ == '__main__':
 	main()
