@@ -43,7 +43,7 @@ syncnet_mel_step_size = 16
 #initializing the wandb logs
 wandb.init(
     # Set the project where this run will be logged
-    project="wav2lip-improved-ms-ssim",  
+    project="wav2lip-improved-ssim",  
     # Track hyperparameters and run metadata
     config={
     "batch_size": hparams.batch_size,
@@ -51,7 +51,7 @@ wandb.init(
     "syncnet_wt": hparams.syncnet_wt,
     "checkpoint_interval": hparams.checkpoint_interval,
     "eval_interval": hparams.eval_interval,
-    "architecture": "vanilla + ms-ssim loss",
+    "architecture": "vanilla + ssim loss",
     "dataset": "lrs2",
 })
 
@@ -203,20 +203,14 @@ def cosine_loss(a, v, y):
 
     return loss
 
-def msssim_loss(g, gt):
+def ssim_loss(g, gt):
     gt = (gt.detach().cpu().numpy().transpose(0, 2, 1, 3, 4))
     gt = torch.from_numpy(gt)
     g = (g.detach().cpu().numpy().transpose(0, 2, 1, 3, 4))
     g = torch.from_numpy(g)
     g.requires_grad_()
-
-    ms_ssim_losses = []
-    for id in range(args.batch_size):
-        ms_ssim_loss = 1 - ms_ssim( X[id], Y[id], data_range=1, size_average=True, win_size=7)
-        ms_ssim_losses.append(ms_ssim_loss)
-    
-    averaged_msssim_loss = sum(ms_ssim_losses) / len(ms_ssim_losses)
-    return averaged_msssim_loss
+    ssim_loss = 1 - ssim( X, Y, data_range=1, size_average=True) # return a scalar
+    return ssim_loss
 
 device = torch.device("cuda" if use_cuda else "cpu")
 syncnet = SyncNet().to(device)
@@ -240,7 +234,7 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
  
     while global_epoch < nepochs:
         print('Starting Epoch: {}'.format(global_epoch))
-        running_sync_loss, running_l1_loss, running_msssim_loss = 0., 0., 0.
+        running_sync_loss, running_l1_loss, running_ssim_loss = 0., 0., 0.
         prog_bar = tqdm(enumerate(train_data_loader))
         for step, (x, indiv_mels, mel, gt) in prog_bar:
             model.train()
@@ -260,10 +254,10 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
                 sync_loss = 0.
 
             l1loss = recon_loss(g, gt)
-            msssimloss = msssim_loss(g, gt)
+            ssimloss = ssim_loss(g, gt)
 
             loss = hparams.syncnet_wt * sync_loss + (1 - hparams.syncnet_wt) * l1loss + \
-                    (1 - hparams.syncnet_wt) * msssimloss
+                    (1 - hparams.syncnet_wt) * ssimloss
 
             loss.backward()
             optimizer.step()
@@ -275,7 +269,7 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
             cur_session_steps = global_step - resumed_step
 
             running_l1_loss += l1loss.item()
-            running_msssim_loss += msssimloss.item()
+            running_ssim_loss += ssimloss.item()
 
             if hparams.syncnet_wt > 0.:
                 running_sync_loss += sync_loss.item()
@@ -294,9 +288,9 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
                         hparams.set_hparam('syncnet_wt', 0.01) # without image GAN a lesser weight is sufficient
 
             prog_bar.set_description('L1: {}, Sync Loss: {}, SSIM Loss: {}'.format(running_l1_loss / (step + 1),
-                                        running_sync_loss / (step + 1), running_msssim_loss / (step + 1)))
+                                        running_sync_loss / (step + 1), running_ssim_loss / (step + 1)))
             wandb.log({"Train L1": running_l1_loss / (step + 1), "Train Sync Loss": running_sync_loss / (step + 1), 
-                        "Train SSIM Loss": running_msssim_loss / (step + 1)})
+                        "Train SSIM Loss": running_ssim_loss / (step + 1)})
 
         global_epoch += 1
         
@@ -304,7 +298,7 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
 def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
     eval_steps = 700
     print('Evaluating for {} steps'.format(eval_steps))
-    sync_losses, recon_losses, msssim_losses = [], [], []
+    sync_losses, recon_losses, ssim_losses = [], [], []
     step = 0
     while 1:
         for x, indiv_mels, mel, gt in test_data_loader:
@@ -321,19 +315,19 @@ def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
 
             sync_loss = get_sync_loss(mel, g)
             l1loss = recon_loss(g, gt)
-            msssimloss = msssim_loss(g, gt)
+            ssimloss = ssim_loss(g, gt)
 
             sync_losses.append(sync_loss.item())
             recon_losses.append(l1loss.item())
-            msssim_losses.append(msssimloss.item())
+            ssim_losses.append(ssimloss.item())
 
             if step > eval_steps: 
                 averaged_sync_loss = sum(sync_losses) / len(sync_losses)
                 averaged_recon_loss = sum(recon_losses) / len(recon_losses)
-                averaged_msssim_loss = sum(msssim_losses) / len(msssim_losses)
+                averaged_ssim_loss = sum(ssim_losses) / len(ssim_losses)
 
-                print('L1: {}, Sync loss: {}, SSIM Loss'.format(averaged_recon_loss, averaged_sync_loss, averaged_msssim_loss))
-                wandb.log({"Eval L1": averaged_recon_loss, "Eval Sync loss": averaged_sync_loss, "Eval SSIM Loss": averaged_msssim_loss})
+                print('L1: {}, Sync loss: {}, SSIM Loss'.format(averaged_recon_loss, averaged_sync_loss, averaged_ssim_loss))
+                wandb.log({"Eval L1": averaged_recon_loss, "Eval Sync loss": averaged_sync_loss, "Eval SSIM Loss": averaged_ssim_loss})
 
                 return averaged_sync_loss
 
