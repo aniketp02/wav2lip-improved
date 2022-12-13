@@ -21,6 +21,8 @@ from hparams import hparams, get_image_list
 from torch.autograd import Variable
 import torch.autograd as autograd
 
+import wandb
+
 parser = argparse.ArgumentParser(description='Code to train the Wav2Lip model WITH the visual quality discriminator')
 
 parser.add_argument("--data_root", help="Root folder of the preprocessed LRS2 dataset", required=True, type=str)
@@ -43,7 +45,24 @@ Tensor = torch.cuda.FloatTensor if use_cuda else torch.FloatTensor
 syncnet_T = 5
 syncnet_mel_step_size = 16
 # Loss weight for gradient penalty
-lambda_gp = 10
+lambda_gp = 1
+
+
+wandb.init(
+    # Set the project where this run will be logged
+    project="wav2lip-improved-wgan_loss",  
+    # Track hyperparameters and run metadata
+    config={
+    "batch_size": hparams.batch_size,
+    "learning_rate": hparams.initial_learning_rate,
+    "syncnet_wt": hparams.syncnet_wt,
+    "disc_wt": hparams.disc_wt,
+    "lambda_gp": lambda_gp,
+    "checkpoint_interval": hparams.checkpoint_interval,
+    "eval_interval": hparams.eval_interval,
+    "architecture": "vanilla + Wgan_div loss",
+    "dataset": "lrs2",
+})
 
 class Dataset(object):
     def __init__(self, split):
@@ -183,6 +202,8 @@ def save_sample_images(x, g, gt, global_step, checkpoint_dir):
     for batch_idx, c in enumerate(collage):
         for t in range(len(c)):
             cv2.imwrite('{}/{}_{}.jpg'.format(folder, batch_idx, t), c[t])
+            wandb_img = wandb.Image('{}/{}_{}.jpg'.format(folder, batch_idx, t), caption="{}_{}".format(batch_idx, t))
+            wandb.log({"{}".format(folder): wandb_img})
 
 logloss = nn.BCELoss()
 def cosine_loss(a, v, y):
@@ -321,6 +342,8 @@ def train(device, model, disc, train_data_loader, test_data_loader, optimizer, d
                                                                                         running_sync_loss / (step + 1),
                                                                                         running_perceptual_loss / (step + 1), disc_loss / (step + 1)
                                                                                         ))
+            wandb.log({"Train L1": running_l1_loss / (step + 1), "Train Sync Loss": running_sync_loss / (step + 1), 
+                        "Train Percep Loss": running_perceptual_loss / (step + 1), "Train Disc Loss": disc_loss / (step + 1)})
         global_epoch += 1
 
 def eval_model(test_data_loader, global_step, device, model, disc):
@@ -374,6 +397,7 @@ def eval_model(test_data_loader, global_step, device, model, disc):
                                                             sum(running_perceptual_loss) / len(running_perceptual_loss),
                                                             sum(running_disc_loss) / len(running_disc_loss)
                                                             ))
+        wandb.log({"Eval L1": sum(running_l1_loss) / len(running_l1_loss), "Eval Sync loss": sum(running_sync_loss) / len(running_sync_loss), "Eval Percep Loss": sum(running_perceptual_loss) / len(running_perceptual_loss), "Eval Disc Loss": sum(running_disc_loss) / len(running_disc_loss)})
         return sum(running_sync_loss) / len(running_sync_loss)
 
 
