@@ -209,8 +209,13 @@ def ssim_loss(g, gt):
     g = (g.detach().cpu().numpy().transpose(0, 2, 1, 3, 4))
     g = torch.from_numpy(g)
     g.requires_grad_()
-    ssim_loss = 1 - ssim( X, Y, data_range=1, size_average=True) # return a scalar
-    return ssim_loss
+
+    ssim_losses = []
+    for id in range(g.shape[0]):
+        ssim_loss = 1 - ssim(g[id], gt[id], data_range=1, size_average=True, win_size=7) # return a scalar
+        ssim_losses.append(ssim_loss)
+    averaged_ssim_loss = sum(ssim_losses) / len(ssim_losses)
+    return averaged_ssim_loss
 
 device = torch.device("cuda" if use_cuda else "cpu")
 syncnet = SyncNet().to(device)
@@ -412,3 +417,5 @@ if __name__ == "__main__":
               checkpoint_dir=checkpoint_dir,
               checkpoint_interval=hparams.checkpoint_interval,
               nepochs=hparams.nepochs)
+
+    wandb.finish()

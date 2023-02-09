@@ -42,7 +42,7 @@ syncnet_mel_step_size = 16
 #initializing the wandb logs
 wandb.init(
     # Set the project where this run will be logged
-    project="wav2lip-improved-percep-vgg",  
+    project="wav2lip-improved-percep-vgg-finetuning",  
     # Track hyperparameters and run metadata
     config={
     "batch_size": hparams.batch_size,
@@ -50,7 +50,7 @@ wandb.init(
     "syncnet_wt": hparams.syncnet_wt,
     "checkpoint_interval": hparams.checkpoint_interval,
     "eval_interval": hparams.eval_interval,
-    "architecture": "vanilla + perceptual loss (VGG)",
+    "architecture": "vanilla + perceptual loss (VGG) + sync loss + reset optimizer",
     "dataset": "lrs2",
 })
 
@@ -180,15 +180,16 @@ class Dataset(object):
             y = torch.FloatTensor(y)
             return x, indiv_mels, mel, y
 
-def save_sample_images(x, g, gt, global_step, checkpoint_dir):
+def save_sample_images(x, g, gt, vanilla_gt, global_step, checkpoint_dir):
     x = (x.detach().cpu().numpy().transpose(0, 2, 3, 4, 1) * 255.).astype(np.uint8)
     g = (g.detach().cpu().numpy().transpose(0, 2, 3, 4, 1) * 255.).astype(np.uint8)
     gt = (gt.detach().cpu().numpy().transpose(0, 2, 3, 4, 1) * 255.).astype(np.uint8)
+    vanilla_gt = (vanilla_gt.detach().cpu().numpy().transpose(0, 2, 3, 4, 1) * 255.).astype(np.uint8)
 
     refs, inps = x[..., 3:], x[..., :3]
     folder = join(checkpoint_dir, "samples_step{:09d}".format(global_step))
     if not os.path.exists(folder): os.mkdir(folder)
-    collage = np.concatenate((refs, inps, g, gt), axis=-2)
+    collage = np.concatenate((refs, inps, gt, g, vanilla_gt), axis=-2)
     for batch_idx, c in enumerate(collage):
         for t in range(len(c)):
             cv2.imwrite('{}/{}_{}.jpg'.format(folder, batch_idx, t), c[t])
@@ -218,8 +219,8 @@ recon_loss = nn.L1Loss()
 def get_percep_loss(g, gt):
     g = (g.detach().cpu().numpy().transpose(0, 2, 1, 3, 4))
     gt = (gt.detach().cpu().numpy().transpose(0, 2, 1, 3, 4))
-    g = torch.from_numpy(g)
-    gt = torch.from_numpy(gt)
+    g = torch.from_numpy(g).to(device)
+    gt = torch.from_numpy(gt).to(device)
 
     losses = []
     for id in range(g.shape[0]):
@@ -239,7 +240,7 @@ def get_sync_loss(mel, g):
     y = torch.ones(g.size(0), 1).float().to(device)
     return cosine_loss(a, v, y)
 
-def train(device, model, train_data_loader, test_data_loader, optimizer,
+def train(device, model, vanilla_model, train_data_loader, test_data_loader, optimizer,
           checkpoint_dir=None, checkpoint_interval=None, nepochs=None):
 
     global global_step, global_epoch
@@ -251,6 +252,7 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
         prog_bar = tqdm(enumerate(train_data_loader))
         for step, (x, indiv_mels, mel, gt) in prog_bar:
             model.train()
+            vanilla_model.eval()
             optimizer.zero_grad()
 
             # Move data to CUDA device
@@ -260,28 +262,29 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
             gt = gt.to(device)
 
             g = model(indiv_mels, x)
+            vanilla_gt = vanilla_model(indiv_mels, x)
 
             if hparams.syncnet_wt > 0.:
                 sync_loss = get_sync_loss(mel, g)
             else:
                 sync_loss = 0.
 
-            l1loss = recon_loss(g, gt)
+            # l1loss = recon_loss(g, gt)
             perceploss = get_percep_loss(g, gt)
 
-            loss = hparams.syncnet_wt * sync_loss + (1 - hparams.syncnet_wt) * l1loss + \
+            loss =  hparams.syncnet_wt * sync_loss + \
                     (1 - hparams.syncnet_wt) * perceploss
 
             loss.backward()
             optimizer.step()
 
             if global_step % checkpoint_interval == 0:
-                save_sample_images(x, g, gt, global_step, checkpoint_dir)
+                save_sample_images(x, g, gt, vanilla_gt, global_step, checkpoint_dir)
 
             global_step += 1
             cur_session_steps = global_step - resumed_step
 
-            running_l1_loss += l1loss.item()
+            # running_l1_loss += l1loss.item()
             running_percep_loss += perceploss.item()
 
             if hparams.syncnet_wt > 0.:
@@ -295,14 +298,14 @@ def train(device, model, train_data_loader, test_data_loader, optimizer,
 
             if global_step == 1 or global_step % hparams.eval_interval == 0:
                 with torch.no_grad():
-                    average_sync_loss = eval_model(test_data_loader, global_step, device, model, checkpoint_dir)
+                    averaged_sync_loss = eval_model(test_data_loader, global_step, device, model, checkpoint_dir)
 
-                    if average_sync_loss < .75:
-                        hparams.set_hparam('syncnet_wt', 0.01) # without image GAN a lesser weight is sufficient
+                    if averaged_sync_loss < .75:
+                        hparams.set_hparam('syncnet_wt', 0.03) # without image GAN a lesser weight is sufficient
 
-            prog_bar.set_description('L1: {}, Sync Loss: {}, Percep Loss: {}'.format(running_l1_loss / (step + 1),
-                                        running_sync_loss / (step + 1), running_percep_loss / (step + 1)))
-            wandb.log({"Train L1": running_l1_loss / (step + 1), "Train Sync Loss": running_sync_loss / (step + 1), 
+            prog_bar.set_description('Sync: {}, Percep Loss: {}'.format(running_sync_loss / (step + 1),
+                                         running_percep_loss / (step + 1)))
+            wandb.log({"Train Sync": running_sync_loss / (step + 1), 
                         "Train Percep Loss": running_percep_loss / (step + 1)})
 
         global_epoch += 1
@@ -327,20 +330,20 @@ def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):
             g = model(indiv_mels, x)
 
             sync_loss = get_sync_loss(mel, g)
-            l1loss = recon_loss(g, gt)
-            perceploss = percep_loss(g, gt)
+            # l1loss = recon_loss(g, gt)
+            perceploss = get_percep_loss(g, gt)
 
             sync_losses.append(sync_loss.item())
-            recon_losses.append(l1loss.item())
+            # recon_losses.append(l1loss.item())
             percep_losses.append(perceploss.item())
 
             if step > eval_steps: 
                 averaged_sync_loss = sum(sync_losses) / len(sync_losses)
-                averaged_recon_loss = sum(recon_losses) / len(recon_losses)
+                # averaged_recon_loss = sum(recon_losses) / len(recon_losses)
                 averaged_percep_loss = sum(percep_losses) / len(percep_losses)
 
-                print('L1: {}, Sync loss: {}, Percep Loss'.format(averaged_recon_loss, averaged_sync_loss, averaged_percep_loss))
-                wandb.log({"Eval L1": averaged_recon_loss, "Eval Sync loss": averaged_sync_loss, "Eval Percep Loss": averaged_percep_loss})
+                print('Sync: {}, Percep Loss'.format(averaged_sync_loss, averaged_percep_loss))
+                wandb.log({"Eval Sync": averaged_sync_loss, "Eval Percep Loss": averaged_percep_loss})
 
                 return averaged_sync_loss
 
@@ -407,13 +410,15 @@ if __name__ == "__main__":
 
     # Model
     model = Wav2Lip().to(device)
+    vanilla_model = Wav2Lip().to(device)
     print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))
 
     optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad],
                            lr=hparams.initial_learning_rate)
 
     if args.checkpoint_path is not None:
-        load_checkpoint(args.checkpoint_path, model, optimizer, reset_optimizer=False)
+        load_checkpoint(args.checkpoint_path, model, optimizer, reset_optimizer=True)
+        load_checkpoint(args.checkpoint_path, vanilla_model, optimizer, reset_optimizer=True)
         
     load_checkpoint(args.syncnet_checkpoint_path, syncnet, None, reset_optimizer=True, overwrite_global_states=False)
 
@@ -421,7 +426,9 @@ if __name__ == "__main__":
         os.mkdir(checkpoint_dir)
 
     # Train!
-    train(device, model, train_data_loader, test_data_loader, optimizer,
+    train(device, model, vanilla_model, train_data_loader, test_data_loader, optimizer,
               checkpoint_dir=checkpoint_dir,
               checkpoint_interval=hparams.checkpoint_interval,
               nepochs=hparams.nepochs)
+    
+    wandb.finish()
