@@ -5,6 +5,9 @@ checkpoints_new/
 face_detection/
 temp/
 train_data/
+wav2lip-losses/wandb/
+results/
+inputs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
